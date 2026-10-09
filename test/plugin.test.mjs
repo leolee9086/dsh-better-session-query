@@ -204,16 +204,20 @@ test("apply:提供 sessionBlockQuery 服务且方法齐全", async () => {
   const service = ctx._provided.get(SERVICE_NAME);
   assert.ok(service !== undefined, `provided 里要有 ${SERVICE_NAME}`);
   assert.deepEqual(Object.keys(service).sort(), [
+    "attributeNamespaces",
     "close",
     "compact",
     "getBlock",
+    "listAttributes",
     "listBlocks",
     "monitor",
+    "putAttribute",
     "queryBlocks",
     "queryMessages",
     "querySessions",
     "queryWorkspaces",
     "reconcile",
+    "removeAttribute",
     "searchBlocks",
     "setPaused",
     "sqlQuery",

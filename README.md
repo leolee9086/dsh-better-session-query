@@ -10,6 +10,12 @@ DSH 插件：给会话历史再挂一套**块级并行索引**。
 - **不改任何 DSH 源码。** 只通过运行时服务契约（注入 `sessionQuery`）读会话，不 import 任何 `@deepseek-ai/*` 包。
 - **零运行时依赖。** 存储用 Node 自带的 `node:sqlite`（FTS5）。
 
+## v0.1.1：原始块读取接口
+
+独立消费插件可从 `dsh-better-session-query/blocks` 导入 `extractRawBlocks`、`walkContentBlocks` 和 `parseToolArguments`。这些纯函数不需要挂载索引服务，也不加载 Harness。`extractRawBlocks(event, { sessionId, turnId })` 要求真实会话 ID 和已提交的非负整数事件序号，返回深度冻结的原始块副本：正文不 trim，路径沿工具结果嵌套展开，保留角色、消息来源、调用 ID、结构化参数与签名/不透明思考元数据。文本区间按 UTF-16 半开坐标提供；工具参数解析失败以 `argumentsError` 明示。搜索投影的 trim、包含开关及码点长度语义保持原样。
+
+本版本只增加块接口和公开包导出。已有记忆召回能力沿用 v0.1.0；另外开发中的记忆同步、向量与混合召回未包含在本次发行。
+
 ## 能回答什么
 
 | 问题 | 走哪条路 |
