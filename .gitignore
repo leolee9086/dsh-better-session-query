@@ -3,3 +3,6 @@ node_modules/
 *.db-wal
 *.db-shm
 test/.tmp/
+# 本地打包与验证输出；发行说明仍纳入版本控制。
+/artifacts/*.tgz
+/pack-validation.log
