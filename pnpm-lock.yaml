@@ -8,16 +8,36 @@ importers:
 
   .:
     dependencies:
+      '@leolee9086/dsh-hybrid-recall':
+        specifier: file:../dsh-hybrid-recall
+        version: file:../dsh-hybrid-recall
       '@leolee9086/dsh-session-blocks':
         specifier: 0.1.0
         version: 0.1.0
+    devDependencies:
+      typescript:
+        specifier: 5.8.3
+        version: 5.8.3
 
 packages:
+
+  '@leolee9086/dsh-hybrid-recall@file:../dsh-hybrid-recall':
+    resolution: {directory: ../dsh-hybrid-recall, type: directory}
+    engines: {node: '>=22.19.0'}
 
   '@leolee9086/dsh-session-blocks@0.1.0':
     resolution: {integrity: sha512-weUQ6Mx6oCT/d6wI8CmvrorODp9WAuzy8FwqWW0V3xrbt74SioLVBB48yu/3ZxTg3ZP172ZwFAHbNmovitNDuw==}
     engines: {node: '>=18'}
 
+  typescript@5.8.3:
+    resolution: {integrity: sha512-p1diW6TqL9L07nNxvRMM7hMMw4c5XOo/1ibL4aAIGmSAt9slTE1Xgw5KWuof2uTOvCg9BY7ZRi+GaF+7sfgPeQ==}
+    engines: {node: '>=14.17'}
+    hasBin: true
+
 snapshots:
 
+  '@leolee9086/dsh-hybrid-recall@file:../dsh-hybrid-recall': {}
+
   '@leolee9086/dsh-session-blocks@0.1.0': {}
+
+  typescript@5.8.3: {}

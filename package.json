@@ -36,8 +36,9 @@
     "LICENSE"
   ],
   "scripts": {
-    "test": "node --test test/*.test.mjs",
-    "prepack": "pnpm check && pnpm test",
+    "build": "tsc -p tsconfig.json",
+    "test": "node --test test/*.test.mjs test/*.test.ts",
+    "prepack": "pnpm build && pnpm check && pnpm test",
     "bench": "node bench/write-bench.mjs",
     "bench:search": "node bench/search-bench.mjs",
     "check": "node --check lib/index.js && node --check lib/blocks.js && node --check lib/store.js && node --check lib/indexer.js && node --check lib/runner.js && node --check lib/monitor.js && node --check lib/memory.js && node --check lib/memory-sync.js && node --check lib/memory-vectors.js && node --check lib/vector-state.js && node --check lib/vector-documents.js && node --check lib/hybrid-recall.js && node --check lib/passive-recall.js && node --check lib/client.js"
@@ -54,6 +55,10 @@
     }
   },
   "dependencies": {
+    "@leolee9086/dsh-hybrid-recall": "file:../dsh-hybrid-recall",
     "@leolee9086/dsh-session-blocks": "0.1.0"
+  },
+  "devDependencies": {
+    "typescript": "5.8.3"
   }
 }

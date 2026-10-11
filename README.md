@@ -14,6 +14,14 @@ DSH 插件：给会话历史再挂一套**块级并行索引**。
 
 通用块身份、遍历和无损抽取现由 `@leolee9086/dsh-session-blocks@0.1.0` 提供；搜索投影与索引策略继续留在本插件。新消费者应直接依赖该纯函数库；原 `/blocks` 入口保留兼容转发，块路径及读取语义不变。该版本已发布到 npm，依赖通过普通 `pnpm install` 安装。
 
+## 开发变更：公共混合召回与主动入口
+
+主动 `session_blocks_recall` 已接受 `query`、`keywords` 或 `image`，并与被动入口共用独立的 `@leolee9086/dsh-hybrid-recall` 实现。工具适配和公共库使用 TypeScript，构建后的 JS/声明文件随仓库提交。
+
+公共库尚未发布，当前开发依赖是 `file:../dsh-hybrid-recall`，需要相邻的公共库工作树。先在公共库运行 `pnpm install`、`pnpm build`，再在本仓运行 `pnpm install`、`pnpm build`。正式分发前需换成公共库发布版本。
+
+本次仅补齐入口与抽离公共实现；图片 `path/image` 映射、图文组合和排序缺口仍见 [开发状态](docs/vector-recall-status.md)，不能据此宣称图片召回已可用。
+
 ## v0.1.1：原始块读取接口
 
 独立消费插件可从 `dsh-better-session-query/blocks` 导入 `extractRawBlocks`、`walkContentBlocks` 和 `parseToolArguments`。这些纯函数不需要挂载索引服务，也不加载 Harness。`extractRawBlocks(event, { sessionId, turnId })` 要求真实会话 ID 和已提交的非负整数事件序号，返回深度冻结的原始块副本：正文不 trim，路径沿工具结果嵌套展开，保留角色、消息来源、调用 ID、结构化参数与签名/不透明思考元数据。文本区间按 UTF-16 半开坐标提供；工具参数解析失败以 `argumentsError` 明示。搜索投影的 trim、包含开关及码点长度语义保持原样。
