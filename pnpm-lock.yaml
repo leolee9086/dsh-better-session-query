@@ -1,0 +1,23 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    dependencies:
+      '@leolee9086/dsh-session-blocks':
+        specifier: 0.1.0
+        version: 0.1.0
+
+packages:
+
+  '@leolee9086/dsh-session-blocks@0.1.0':
+    resolution: {integrity: sha512-weUQ6Mx6oCT/d6wI8CmvrorODp9WAuzy8FwqWW0V3xrbt74SioLVBB48yu/3ZxTg3ZP172ZwFAHbNmovitNDuw==}
+    engines: {node: '>=18'}
+
+snapshots:
+
+  '@leolee9086/dsh-session-blocks@0.1.0': {}

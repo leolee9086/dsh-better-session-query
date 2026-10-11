@@ -53,5 +53,7 @@
       "platform": "web"
     }
   },
-  "dependencies": {}
+  "dependencies": {
+    "@leolee9086/dsh-session-blocks": "0.1.0"
+  }
 }

@@ -8,7 +8,11 @@ DSH 插件：给会话历史再挂一套**块级并行索引**。
 
 - **不替换 provider。** 官方 `sessionQuery` 服务照旧由原插件提供，本插件只是它的消费者；两者可以同时开着（官方那套 `openAt: never` 也不影响本插件，因为它自己读会话日志）。
 - **不改任何 DSH 源码。** 只通过运行时服务契约（注入 `sessionQuery`）读会话，不 import 任何 `@deepseek-ai/*` 包。
-- **零运行时依赖。** 存储用 Node 自带的 `node:sqlite`（FTS5）。
+- **共享纯函数库。** 分块依赖 `@leolee9086/dsh-session-blocks`；存储用 Node 自带的 `node:sqlite`（FTS5）。
+
+## 开发变更：独立分块库
+
+通用块身份、遍历和无损抽取现由 `@leolee9086/dsh-session-blocks@0.1.0` 提供；搜索投影与索引策略继续留在本插件。新消费者应直接依赖该纯函数库；原 `/blocks` 入口保留兼容转发，块路径及读取语义不变。该版本已发布到 npm，依赖通过普通 `pnpm install` 安装。
 
 ## v0.1.1：原始块读取接口
 
