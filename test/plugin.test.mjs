@@ -5,6 +5,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
+import { createHash } from "node:crypto";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 // 测试不碰真实用户目录:DSH_HOME 指到临时目录,库与诊断日志路径随之隔离。
 process.env.DSH_HOME = path.join(os.tmpdir(), `bsq-test-home-${process.pid}`);
 
@@ -172,7 +174,7 @@ test("session_blocks_remember:伪工具只回显,不落库、不碰索引", asyn
     tag: "环境",
     expires: "换了项目就作废",
   });
-  assert.match(out, /已记入会话流/);
+  assert.match(out, /已标记在会话流中/);
   assert.match(out, /Q: 包管理器用哪个/);
   assert.match(out, /A: pnpm/);
   assert.match(out, /tag: 环境/);
@@ -197,6 +199,46 @@ test("session_blocks_remember:q/a 必填,tag/expires 可省", async () => {
   assert.doesNotMatch(minimal, /tag:/, "没给 tag 就不该回显 tag 行");
   assert.doesNotMatch(minimal, /失效条件:/, "没给 expires 就不该回显失效条件行");
   await app.ctx._provided.get(SERVICE_NAME).close();
+});
+
+// 图片附件:工具只校验"这些字节确实还在",不写库——记忆正文仍靠会话流承载。
+test("session_blocks_remember:图片附件按字节校验,坏路径与坏哈希都拒收", async () => {
+  const app = await setupIndexed();
+  const service = app.ctx._provided.get(SERVICE_NAME);
+  const before = await service.stats();
+  // 1x1 透明 PNG:真实图片字节,用来走"读文件 + 比 SHA256"这条路径。
+  const dir = await mkdtemp(path.join(os.tmpdir(), "bsq-attachment-"));
+  const image = path.join(dir, "dot.png");
+  const bytes = Buffer.from(
+    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000a49444154789c63000100000500010d0a2db40000000049454e44ae426082",
+    "hex",
+  );
+  await writeFile(image, bytes);
+  const sha256 = createHash("sha256").update(bytes).digest("hex");
+  try {
+    const out = await app.run("session_blocks_remember", {
+      q: "附件测试",
+      a: "只有这张图",
+      attachments: [{ type: "image", path: image, sha256 }],
+    });
+    assert.match(out, /图片: /);
+    assert.ok(out.includes(image), "回显要带上图片路径");
+    const cases = [
+      [{ type: "image", path: image, sha256: "0".repeat(64) }, "字节对不上"],
+      [{ type: "image", path: "dot.png", sha256 }, "相对路径"],
+      [{ type: "image", path: path.join(dir, "nope.png"), sha256 }, "文件不在"],
+      [{ type: "image", path: image }, "缺 SHA256"],
+    ];
+    for (const [attachment, why] of cases) {
+      const rejected = await app.run("session_blocks_remember", { q: "附件测试", a: "拒收", attachments: [attachment] });
+      assert.match(rejected, /ERROR: 图片附件校验失败/, why);
+    }
+    const after = await service.stats();
+    assert.equal(after.blocks, before.blocks, "记住一条带图的记忆不该往块索引里写东西");
+  } finally {
+    await service.close();
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("apply:提供 sessionBlockQuery 服务且方法齐全", async () => {
