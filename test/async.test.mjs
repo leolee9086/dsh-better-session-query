@@ -6,6 +6,7 @@ import { apply } from "../lib/index.js";
 // 测试不碰真实用户目录:DSH_HOME 指到临时目录,库与诊断日志路径随之隔离。
 process.env.DSH_HOME = `${(process.env.TEMP ?? process.env.TMP ?? ".").replace(/[\\/]+$/, "")}/bsq-test-home-${process.pid}`;
 import { openStore } from "../lib/store.js";
+import { logReaderFor } from "./log-reader-mock.mjs";
 import { createIndexer } from "../lib/indexer.js";
 import { createIndexRunner } from "../lib/runner.js";
 
@@ -18,9 +19,39 @@ function fakeConversation(count = 3, { gate } = {}) {
       { seq: 0, type: "user/message", time: 1000 + index, surface: "current", data: { content: [{ type: "text", text: `第 ${index} 个会话` }] } },
     ],
   }));
-  const stats = { inFlight: 0, maxInFlight: 0, listEvents: 0, readSession: 0 };
+  const stats = { inFlight: 0, maxInFlight: 0, batch: 0, readSession: 0 };
+  const readerBase = () => logReaderFor({
+    listSessions: async () => sessions.map((s) => ({ header: { id: s.id, cwd: s.cwd }, live: false, persisted: true })),
+    readSession: async (id) => {
+      const found = sessions.find((s) => s.id === id);
+      return { session: { id: found.id, cwd: found.cwd }, inheritedEventCount: 0, events: found.events };
+    },
+  });
   return {
     stats,
+    /**
+     * 带并发记账的日志源:闸门与在飞计数挂在批次读上。
+     * 旧版把闸门挂在 listEvents,新实现不再调它,所以计数必须跟着换到 readSessionBatch。
+     */
+    logReader() {
+      const base = readerBase();
+      return {
+        locateSessionLog: (id) => base.locateSessionLog(id),
+      statSessionLog: (path) => base.statSessionLog(path),
+      async readSessionBatch(path, offset, limit) {
+        stats.batch += 1;
+        stats.inFlight += 1;
+        stats.maxInFlight = Math.max(stats.maxInFlight, stats.inFlight);
+        try {
+          if (gate !== undefined) await gate;
+          return await base.readSessionBatch(path, offset, limit);
+        } finally {
+          stats.inFlight -= 1;
+        }
+      },
+      invalidate: (id) => base.invalidate(id),
+    };
+    },
     async listSessions() {
       return sessions.map((s) => ({ header: { id: s.id, cwd: s.cwd }, live: false, persisted: true }));
     },
@@ -73,13 +104,13 @@ test("单飞:并发触发不会并行跑两轮", async () => {
   const conversation = fakeConversation(3);
   const store = await openStore({ path: ":memory:" });
   try {
-    const indexer = createIndexer({ conversation, store, options: {}, log: () => {} });
+    const indexer = createIndexer({ conversation, logReader: conversation.logReader(), store, options: {}, log: () => {} });
     const runner = createIndexRunner({ indexer, yieldEvery: 1 });
     const [first, second] = await Promise.all([runner.run({ force: true }), runner.run({ force: true })]);
     assert.equal(first.updated, 3);
     assert.equal(second.updated, 3, "第二轮照样跑完(排队,不丢请求)");
     assert.equal(conversation.stats.maxInFlight, 1, "同一时刻只有一轮在跑");
-    assert.equal(conversation.stats.readSession, 6, "两轮各自读过一次(单飞不等于合并)");
+    assert.equal(conversation.stats.batch, 6, "两轮各自读过一次(单飞不等于合并)");
   } finally {
     store.close();
   }
@@ -89,7 +120,7 @@ test("进度:phase 序列与计数一路走到 done,最后回到 idle", async ()
   const conversation = fakeConversation(3);
   const store = await openStore({ path: ":memory:" });
   try {
-    const indexer = createIndexer({ conversation, store, options: {}, log: () => {} });
+    const indexer = createIndexer({ conversation, logReader: conversation.logReader(), store, options: {}, log: () => {} });
     const seen = [];
     const runner = createIndexRunner({
       indexer,
@@ -118,7 +149,7 @@ test("分片让出:对账期间事件循环被交还(宏任务有机会跑)", as
   const conversation = fakeConversation(4);
   const store = await openStore({ path: ":memory:" });
   try {
-    const indexer = createIndexer({ conversation, store, options: {}, log: () => {} });
+    const indexer = createIndexer({ conversation, logReader: conversation.logReader(), store, options: {}, log: () => {} });
     const runner = createIndexRunner({ indexer, yieldEvery: 1 });
     let turns = 0;
     let ticking = true;
@@ -141,7 +172,7 @@ test("后台模式:检索不等待对账,后台跑完后就能搜到", async () 
   const gate = new Promise((resolve) => { release = resolve; });
   const conversation = fakeConversation(2, { gate });
   const ctx = fakeCtx(conversation);
-  await apply(ctx, { path: ":memory:", reconcileOnSearch: "background" });
+  await apply(ctx, { path: ":memory:", reconcileOnSearch: "background", logReader: conversation.logReader() });
   const service = ctx._provided.get("sessionBlockQuery");
 
   const first = await ctx._tools.get("session_blocks_search").execute({ query: "第 0 个会话" }, {});
@@ -164,17 +195,13 @@ test("stop():在飞的一轮在会话边界优雅停下,后台定时也能真正
   try {
     let release;
     const gate = new Promise((resolve) => { release = resolve; });
-    let listEventsCalls = 0;
+    let batchCalls = 0;
     const sessions = Array.from({ length: 5 }, (_, index) => ({ id: `s${index}`, cwd: "D:\\dev" }));
     const conversation = {
       async listSessions() {
         return sessions.map((s) => ({ header: { id: s.id, cwd: s.cwd }, live: false, persisted: true }));
       },
-      async listEvents(id) {
-        listEventsCalls += 1;
-        if (listEventsCalls === 1) await gate; // 第一个会话卡住,期间调用 stop()
-        return [{ seq: 0, type: "user/message", time: 1000, surface: "current" }];
-      },
+
       async readSession(id) {
         return {
           session: { id, cwd: "D:\\dev" },
@@ -189,17 +216,29 @@ test("stop():在飞的一轮在会话边界优雅停下,后台定时也能真正
         return ids.map(() => ({ status: "fulfilled", value: {} }));
       },
     };
-    const indexer = createIndexer({ conversation, store, options: {}, log: () => {} });
+    const baseReader = logReaderFor(conversation);
+    const logReader = {
+      locateSessionLog: (id) => baseReader.locateSessionLog(id),
+      statSessionLog: (path) => baseReader.statSessionLog(path),
+      async readSessionBatch(path, offset, limit) {
+        batchCalls += 1;
+        if (batchCalls === 1) await gate;
+        return baseReader.readSessionBatch(path, offset, limit);
+      },
+    };
+    const indexer = createIndexer({ conversation, logReader, store, options: {}, log: () => {} });
     const runner = createIndexRunner({ indexer, log: () => {} });
 
     const inFlight = runner.run({ force: true });
-    await new Promise((resolve) => { setImmediate(resolve); });
-    assert.equal(listEventsCalls, 1, "此刻正卡在第一个会话上");
+    for (let i = 0; i < 200 && batchCalls === 0; i += 1) {
+      await new Promise((resolve) => { setImmediate(resolve); });
+    }
+    assert.equal(batchCalls, 1, "此刻正卡在第一个会话上");
     runner.stop();
     release();
     const summary = await inFlight;
     assert.equal(summary.aborted, true, "取消要如实标记,而不是假装跑完");
-    assert.equal(listEventsCalls, 1, "停下之后没有再读任何会话");
+    assert.equal(batchCalls, 1, "停下之后没有再读任何会话");
     assert.equal(runner.progress().phase, "stopped");
     assert.equal(runner.isRunning(), false);
 
@@ -208,11 +247,11 @@ test("stop():在飞的一轮在会话边界优雅停下,后台定时也能真正
     assert.equal(background.startBackground(), true);
     assert.equal(background.startBackground(), false, "重复开定时是幂等的");
     await new Promise((resolve) => { setTimeout(resolve, 40); });
-    const afterStart = listEventsCalls;
+    const afterStart = batchCalls;
     assert.ok(afterStart > 1, `后台定时确实跑了一轮(读到 ${afterStart} 次)`);
     background.stop();
     await new Promise((resolve) => { setTimeout(resolve, 40); });
-    assert.equal(listEventsCalls, afterStart, "stop() 之后后台不再触发新的一轮");
+    assert.equal(batchCalls, afterStart, "stop() 之后后台不再触发新的一轮");
   } finally {
     store.close();
   }

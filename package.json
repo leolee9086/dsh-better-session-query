@@ -1,6 +1,6 @@
 {
   "name": "dsh-better-session-query",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "DSH 插件：给会话历史再挂一套块级并行索引——一条消息拆成 text/reasoning/tool-call/tool-result 等块，块是索引行，可按块检索与读取。不替换官方 session-query，不改任何 DSH 源码。",
   "author": "leolee9086",
   "repository": {
@@ -55,10 +55,12 @@
     }
   },
   "dependencies": {
-    "@leolee9086/dsh-hybrid-recall": "file:../dsh-hybrid-recall",
-    "@leolee9086/dsh-session-blocks": "0.1.0"
+    "@leolee9086/dsh-hybrid-recall": "https://github.com/leolee9086/dsh-hybrid-recall/releases/download/v0.1.0/leolee9086-dsh-hybrid-recall-0.1.0.tgz",
+    "@leolee9086/dsh-session-blocks": "0.1.0",
+    "@leolee9086/rebec": "^0.1.0"
   },
   "devDependencies": {
+    "@leolee9086/vectordb": "https://github.com/leolee9086/vectordb/releases/download/v0.1.0/leolee9086-vectordb-0.1.0.tgz",
     "typescript": "5.8.3"
   }
 }

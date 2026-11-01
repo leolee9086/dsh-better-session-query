@@ -9,25 +9,34 @@ importers:
   .:
     dependencies:
       '@leolee9086/dsh-hybrid-recall':
-        specifier: file:../dsh-hybrid-recall
-        version: file:../dsh-hybrid-recall
+        specifier: https://github.com/leolee9086/dsh-hybrid-recall/releases/download/v0.1.0/leolee9086-dsh-hybrid-recall-0.1.0.tgz
+        version: https://github.com/leolee9086/dsh-hybrid-recall/releases/download/v0.1.0/leolee9086-dsh-hybrid-recall-0.1.0.tgz
       '@leolee9086/dsh-session-blocks':
         specifier: 0.1.0
         version: 0.1.0
     devDependencies:
+      '@leolee9086/vectordb':
+        specifier: https://github.com/leolee9086/vectordb/releases/download/v0.1.0/leolee9086-vectordb-0.1.0.tgz
+        version: https://github.com/leolee9086/vectordb/releases/download/v0.1.0/leolee9086-vectordb-0.1.0.tgz
       typescript:
         specifier: 5.8.3
         version: 5.8.3
 
 packages:
 
-  '@leolee9086/dsh-hybrid-recall@file:../dsh-hybrid-recall':
-    resolution: {directory: ../dsh-hybrid-recall, type: directory}
+  '@leolee9086/dsh-hybrid-recall@https://github.com/leolee9086/dsh-hybrid-recall/releases/download/v0.1.0/leolee9086-dsh-hybrid-recall-0.1.0.tgz':
+    resolution: {integrity: sha512-688/xPhoMAjtL0JxEsl32zdWzKorfMo5StqZPV9rVlVAnMy7CkKsi4JLxTdAnxY/YL/TU6+wK+z9pf0+5Cylhg==, tarball: https://github.com/leolee9086/dsh-hybrid-recall/releases/download/v0.1.0/leolee9086-dsh-hybrid-recall-0.1.0.tgz}
+    version: 0.1.0
     engines: {node: '>=22.19.0'}
 
   '@leolee9086/dsh-session-blocks@0.1.0':
     resolution: {integrity: sha512-weUQ6Mx6oCT/d6wI8CmvrorODp9WAuzy8FwqWW0V3xrbt74SioLVBB48yu/3ZxTg3ZP172ZwFAHbNmovitNDuw==}
     engines: {node: '>=18'}
+
+  '@leolee9086/vectordb@https://github.com/leolee9086/vectordb/releases/download/v0.1.0/leolee9086-vectordb-0.1.0.tgz':
+    resolution: {integrity: sha512-D9WCOiazO+UvhvEQUN8ocMWiugapJ2g/b/aYyjk3b7BKgH9As0xC9xBk6LtOmGLAQevfZmtlxnAnsmeHJlQ/Xg==, tarball: https://github.com/leolee9086/vectordb/releases/download/v0.1.0/leolee9086-vectordb-0.1.0.tgz}
+    version: 0.1.0
+    engines: {node: '>=22.19.0'}
 
   typescript@5.8.3:
     resolution: {integrity: sha512-p1diW6TqL9L07nNxvRMM7hMMw4c5XOo/1ibL4aAIGmSAt9slTE1Xgw5KWuof2uTOvCg9BY7ZRi+GaF+7sfgPeQ==}
@@ -36,8 +45,10 @@ packages:
 
 snapshots:
 
-  '@leolee9086/dsh-hybrid-recall@file:../dsh-hybrid-recall': {}
+  '@leolee9086/dsh-hybrid-recall@https://github.com/leolee9086/dsh-hybrid-recall/releases/download/v0.1.0/leolee9086-dsh-hybrid-recall-0.1.0.tgz': {}
 
   '@leolee9086/dsh-session-blocks@0.1.0': {}
+
+  '@leolee9086/vectordb@https://github.com/leolee9086/vectordb/releases/download/v0.1.0/leolee9086-vectordb-0.1.0.tgz': {}
 
   typescript@5.8.3: {}

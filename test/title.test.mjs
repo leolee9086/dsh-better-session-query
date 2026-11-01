@@ -69,9 +69,28 @@ function fakeConversation({ failTitles = false, noTitleApi = false } = {}) {
       });
     };
   }
+  // 给测试用的日志源适配器暴露事件表(生产不需要)。
+  service.__eventsOf = (id) => sessions.find((s) => s.id === id)?.events;
   return service;
 }
 
+/**
+ * 从假 conversation 造一个日志源:定位/大小/分批读都由它的真实事件数组提供。
+ * 索引器现在走"文件 + 分批"这条路,测试用这个适配器把内存数据喂给它。
+ */
+function logReaderOf(service) {
+  const eventsOf = (path) => service.__eventsOf(path.replace("fake://", "")) ?? [];
+  return {
+    locateSessionLog: (id) => (service.__eventsOf(id) === undefined ? undefined : "fake://" + id),
+    statSessionLog: (path) => ({ size: eventsOf(path).length }),
+    readSessionBatch: (path, offset, limit) => {
+      // 测试数据可能乱序,真实日志一定按 seq 追加;这里先归位,免得把"乱序"当成实现问题。
+      const all = [...eventsOf(path)].sort((left, right) => left.seq - right.seq);
+      const slice = all.slice(offset, offset + limit);
+      return { events: slice, nextOffset: offset + slice.length, done: offset + slice.length >= all.length, torn: false };
+    },
+  };
+}
 function fakeCtx(conversation) {
   const tools = new Map();
   const provided = new Map();
@@ -92,7 +111,8 @@ function fakeCtx(conversation) {
 test("对账时把会话标题落库,空标题不留占位", async () => {
   const store = await openStore({ path: ":memory:" });
   try {
-    const indexer = createIndexer({ conversation: fakeConversation(), store, options: {}, log: () => {} });
+    const svc = fakeConversation();
+    const indexer = createIndexer({ conversation: svc, logReader: logReaderOf(svc), store, options: {}, log: () => {} });
     await indexer.reconcile({ force: true });
     const byId = new Map(store.querySessions({ limit: 10 }).items.map((item) => [item.sessionId, item]));
     assert.equal(byId.get("session-alpha").title, "Alpha 索引设计");
@@ -108,7 +128,8 @@ test("对账时把会话标题落库,空标题不留占位", async () => {
 test("按标题片段查会话:ASCII 大小写不敏感,中文按片段,通配符转义", async () => {
   const store = await openStore({ path: ":memory:" });
   try {
-    const indexer = createIndexer({ conversation: fakeConversation(), store, options: {}, log: () => {} });
+    const svc = fakeConversation();
+    const indexer = createIndexer({ conversation: svc, logReader: logReaderOf(svc), store, options: {}, log: () => {} });
     await indexer.reconcile({ force: true });
     assert.deepEqual(store.querySessions({ titleContains: "alpha" }).items.map((i) => i.sessionId), ["session-alpha"]);
     assert.deepEqual(store.querySessions({ titleContains: "ALPHA" }).items.map((i) => i.sessionId), ["session-alpha"]);
@@ -128,8 +149,9 @@ test("按标题片段查会话:ASCII 大小写不敏感,中文按片段,通配�
 });
 
 test("工具层:会话清单带标题,可按标题收窄", async () => {
-  const ctx = fakeCtx(fakeConversation());
-  await apply(ctx, { path: ":memory:" });
+  const conversation = fakeConversation();
+  const ctx = fakeCtx(conversation);
+  await apply(ctx, { path: ":memory:", logReader: logReaderOf(conversation) });
   await ctx._tools.get("session_blocks_status").execute({ reindex: true }, {});
 
   const list = await ctx._tools.get("session_blocks_workspaces").execute({ groupBy: "session" }, {});
@@ -143,8 +165,9 @@ test("工具层:会话清单带标题,可按标题收窄", async () => {
 });
 
 test("检索与块查询的结果里附上标题(优先读库里那份)", async () => {
-  const ctx = fakeCtx(fakeConversation());
-  await apply(ctx, { path: ":memory:" });
+  const conversation = fakeConversation();
+  const ctx = fakeCtx(conversation);
+  await apply(ctx, { path: ":memory:", logReader: logReaderOf(conversation) });
   await ctx._tools.get("session_blocks_status").execute({ reindex: true }, {});
 
   const hits = await ctx._tools.get("session_blocks_search").execute({ query: "甲的答复" }, {});
@@ -168,7 +191,7 @@ test("标题来自日志本身:标题服务抛错或缺席都不影响索引,也
   ]) {
     const store = await openStore({ path: ":memory:" });
     try {
-      const indexer = createIndexer({ conversation, store, options: {}, log: () => {} });
+      const indexer = createIndexer({ conversation, logReader: logReaderOf(conversation), store, options: {}, log: () => {} });
       const summary = await indexer.reconcile({ force: true });
       assert.equal(summary.updated, 3, `${label}:索引照常`);
       assert.equal(summary.errors, 0, `${label}:不算索引失败`);

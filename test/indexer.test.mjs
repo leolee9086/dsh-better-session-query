@@ -69,13 +69,53 @@ function createConversation(entries) {
   };
 }
 
+/**
+ * 造一个假的日志源,接口与 lib/log-source.js 一致。
+ *
+ * 用事件数代替字节数当"文件大小":增量判据只看它涨没涨,量纲不重要。
+ * 这里刻意不引入真实文件:索引逻辑该被测的是"读到哪、写了什么",不是文件 IO。
+ * @param entries - [{ id, events, readError }]。
+ */
+function createLogReader(state) {
+  const calls = { locate: 0, stat: 0, batch: 0, statById: new Map(), batchById: new Map() };
+  const bump = (map, key) => map.set(key, (map.get(key) ?? 0) + 1);
+  const idOf = (path) => path.replace("fake://", "");
+  return {
+    calls,
+    locateSessionLog(id) {
+      calls.locate += 1;
+      const entry = state.get(id);
+      if (entry === undefined || entry.noLog === true) return undefined;
+      return "fake://" + id;
+    },
+    statSessionLog(path) {
+      calls.stat += 1;
+      bump(calls.statById, idOf(path));
+      const entry = state.get(idOf(path));
+      if (entry === undefined) throw new Error("没有这份日志 " + path);
+      return { size: (entry.events ?? []).length };
+    },
+    readSessionBatch(path, offset, limit) {
+      calls.batch += 1;
+      bump(calls.batchById, idOf(path));
+      const entry = state.get(idOf(path));
+      if (entry === undefined) throw new Error("没有这份日志 " + path);
+      if (entry.readError) throw new Error(entry.readError);
+      const all = entry.events ?? [];
+      const events = all.slice(offset, offset + limit);
+      const nextOffset = offset + events.length;
+      return { events, nextOffset, done: nextOffset >= all.length, torn: false };
+    },
+  };
+}
 /** 造一个对账器(自带内存库与日志收集)。 */
 async function setupIndexer(entries, options = {}) {
   const conversation = createConversation(entries);
+  const logReader = createLogReader(conversation.state);
   const store = await openStore({ path: ":memory:" });
   const logs = [];
-  const indexer = createIndexer({ conversation, store, options, log: (message) => logs.push(message) });
-  return { conversation, store, indexer, logs, options };
+  const indexer = createIndexer({ conversation, logReader, store, options, log: (message) => logs.push(message) });
+  return { conversation, logReader, store, indexer, logs, options };
 }
 
 /** 摘要里与对账语义有关的那几个字段(库里可能还会加别的计数,这里只钉住这五个)。 */
@@ -90,7 +130,7 @@ function core(summary) {
 }
 
 test("reconcile:首次把会话索引进去,块数正确", async () => {
-  const { store, indexer, logs } = await setupIndexer([{
+  const { logReader, store, indexer, logs } = await setupIndexer([{
     id: "c1",
     events: [userEvent(0, "第一问"), assistantEvent(1, { reasoning: "先想一下", text: "第一答" })],
   }]);
@@ -109,7 +149,7 @@ test("reconcile:首次把会话索引进去,块数正确", async () => {
 });
 
 test("reconcile:同样数据再跑一次是 unchanged,不重读 readSession", async () => {
-  const { conversation, store, indexer } = await setupIndexer(
+  const { conversation, logReader, store, indexer } = await setupIndexer(
     [{ id: "c1", events: [userEvent(0, "第一问"), assistantEvent(1, { text: "第一答" })] }],
     { recheckMs: 0 },
   );
@@ -119,15 +159,15 @@ test("reconcile:同样数据再跑一次是 unchanged,不重读 readSession", as
   const summary = await indexer.reconcile();
   assert.deepEqual(core(summary), { listed: 1, planned: 1, updated: 0, unchanged: 1, errors: 0 });
   assert.equal(summary.excluded, 0, "没有工作区排除规则时不该排除任何会话");
-  assert.equal(conversation.calls.listEvents, 2, "每轮都要看一眼轻量记录");
-  assert.equal(conversation.calls.readSession, 1, "修订指纹没变就不该再读正文");
+  assert.equal(logReader.calls.stat, 2, "每轮都要看一眼日志长度");
+  assert.equal(logReader.calls.batch, 1, "长度没变就不该再读事件");
   assert.equal(store.generation(), 1, "markChecked 只更新时间戳,不推进世代");
   assert.ok(Number(store.getSession("c1").checked_ms) >= checked, "检查时间被刷新,TTL 因此重新计时");
   store.close();
 });
 
 test("reconcile:listEvents 的轻量记录变了就重建该会话", async () => {
-  const { conversation, store, indexer } = await setupIndexer(
+  const { conversation, logReader, store, indexer } = await setupIndexer(
     [{ id: "c1", events: [userEvent(0, "第一问")] }],
     { recheckMs: 0 },
   );
@@ -137,7 +177,7 @@ test("reconcile:listEvents 的轻量记录变了就重建该会话", async () =>
   conversation.state.get("c1").events.push(userEvent(1, "第二问", T0 + 1000));
   const summary = await indexer.reconcile();
   assert.deepEqual(core(summary), { listed: 1, planned: 1, updated: 1, unchanged: 0, errors: 0 });
-  assert.equal(conversation.calls.readSession, 2);
+  assert.equal(logReader.calls.batch, 2);
   assert.equal(store.stats().blocks, 2, "旧块被整体替换");
   assert.equal(store.getSession("c1").events, 2);
   assert.equal(store.search({ query: "第二问" }).items.length, 1);
@@ -145,7 +185,7 @@ test("reconcile:listEvents 的轻量记录变了就重建该会话", async () =>
 });
 
 test("reconcile:实时会话忽略 TTL 每次都查,冷会话在 TTL 内不查", async () => {
-  const { conversation, indexer } = await setupIndexer(
+  const { logReader, indexer } = await setupIndexer(
     [
       { id: "live", live: true, events: [userEvent(0, "实时会话")] },
       { id: "cold", live: false, events: [userEvent(0, "冷会话")] },
@@ -159,43 +199,43 @@ test("reconcile:实时会话忽略 TTL 每次都查,冷会话在 TTL 内不查",
     { listed: 2, planned: 1, updated: 0, unchanged: 1, errors: 0 },
     "冷会话还在 TTL 内,只剩实时会话要查",
   );
-  assert.equal(conversation.calls.listEventsById.get("live"), 2);
-  assert.equal(conversation.calls.listEventsById.get("cold"), 1);
-  assert.equal(conversation.calls.readSession, 2, "两轮都没有真重建:修订指纹一致");
+  assert.equal(logReader.calls.statById.get("live"), 2);
+  assert.equal(logReader.calls.statById.get("cold"), 1);
+  assert.equal(logReader.calls.batch, 2, "两轮都没有真重建:日志长度一致");
 });
 
 test("reconcile:recheckMs 很大的冷会话在 TTL 内被整轮跳过(planned=0)", async () => {
-  const { conversation, store, indexer } = await setupIndexer(
+  const { conversation, logReader, store, indexer } = await setupIndexer(
     [{ id: "cold", live: false, events: [userEvent(0, "冷会话")] }],
     { recheckMs: 10_000_000 },
   );
   await indexer.reconcile();
 
   assert.deepEqual(core(await indexer.reconcile()), { listed: 1, planned: 0, updated: 0, unchanged: 0, errors: 0 });
-  assert.equal(conversation.calls.listEvents, 1, "跳过就一点都不读");
+  assert.equal(logReader.calls.stat, 1, "跳过就一点都不读");
   assert.equal(store.generation(), 1);
   store.close();
 });
 
 test("reconcile:force 忽略修订指纹与 TTL", async () => {
-  const { conversation, store, indexer } = await setupIndexer(
+  const { conversation, logReader, store, indexer } = await setupIndexer(
     [{ id: "cold", live: false, events: [userEvent(0, "冷会话")] }],
     { recheckMs: 10_000_000 },
   );
   await indexer.reconcile();
-  assert.equal(conversation.calls.readSession, 1);
+  assert.equal(logReader.calls.batch, 1);
 
   assert.deepEqual(
     core(await indexer.reconcile({ force: true })),
     { listed: 1, planned: 1, updated: 1, unchanged: 0, errors: 0 },
   );
-  assert.equal(conversation.calls.readSession, 2, "force 下即使修订没变也重读正文");
+  assert.equal(logReader.calls.batch, 2, "force 下即使长度没变也重读事件");
   assert.equal(store.generation(), 2);
   store.close();
 });
 
 test("reconcile:sessionIds 过滤只处理指定会话", async () => {
-  const { conversation, store, indexer } = await setupIndexer([
+  const { conversation, logReader, store, indexer } = await setupIndexer([
     { id: "a", events: [userEvent(0, "会话甲")] },
     { id: "b", events: [userEvent(0, "会话乙")] },
   ]);
@@ -208,7 +248,7 @@ test("reconcile:sessionIds 过滤只处理指定会话", async () => {
   );
   assert.ok(store.getSession("a") !== undefined);
   assert.equal(store.getSession("b"), undefined);
-  assert.equal(conversation.calls.readSessionById.get("b"), undefined);
+  assert.equal(logReader.calls.batchById.get("b"), undefined);
   store.close();
 });
 
@@ -218,17 +258,17 @@ test("reconcile:maxSessionsPerReconcile 限制本轮数量", async () => {
     { id: "b", events: [userEvent(0, "会话乙")] },
     { id: "c", events: [userEvent(0, "会话丙")] },
   ];
-  const { conversation, store, indexer } = await setupIndexer(entries, { maxSessionsPerReconcile: 1 });
+  const { conversation, logReader, store, indexer } = await setupIndexer(entries, { maxSessionsPerReconcile: 1 });
 
   const first = await indexer.reconcile();
   assert.equal(first.planned, 3, "计划里是全部待查会话");
   assert.equal(first.updated, 1, "但本轮只做前 1 个");
-  assert.equal(conversation.calls.readSession, 1);
+  assert.equal(logReader.calls.batch, 1);
 
   const second = await indexer.reconcile({ maxSessions: 2, force: true });
   assert.equal(second.planned, 3);
   assert.equal(second.updated, 2, "请求参数可以覆盖配置");
-  assert.equal(conversation.calls.readSession, 3);
+  assert.equal(logReader.calls.batch, 3);
   assert.equal(store.stats().sessions, 2, "两轮各做一部分:第一轮 a,第二轮 a + b");
 
   const third = await indexer.reconcile({ maxSessions: 10, force: true });
@@ -238,7 +278,7 @@ test("reconcile:maxSessionsPerReconcile 限制本轮数量", async () => {
 });
 
 test("reconcile:某个会话读正文失败时其他会话照常索引,errors 计数 +1", async () => {
-  const { store, indexer, logs } = await setupIndexer([
+  const { logReader, store, indexer, logs } = await setupIndexer([
     { id: "bad", readError: "读正文炸了", events: [userEvent(0, "坏会话")] },
     { id: "good", events: [userEvent(0, "好会话")] },
   ]);
@@ -253,7 +293,7 @@ test("reconcile:某个会话读正文失败时其他会话照常索引,errors �
 });
 
 test("reconcileOne:索引指定会话;列表里没有的会话会被清出索引", async () => {
-  const { conversation, store, indexer } = await setupIndexer([{ id: "c1", events: [userEvent(0, "唯一会话")] }]);
+  const { conversation, logReader, store, indexer } = await setupIndexer([{ id: "c1", events: [userEvent(0, "唯一会话")] }]);
 
   assert.equal(await indexer.reconcileOne("c1"), "updated", "默认 force:按 id 精确刷新就重读正文");
   assert.equal(store.stats().sessions, 1);
@@ -270,7 +310,7 @@ test("reconcileOne:索引指定会话;列表里没有的会话会被清出索引
 });
 
 test("reconcile:include 打开 reasoning 后思考块进倒排", async () => {
-  const { store, indexer } = await setupIndexer(
+  const { logReader, store, indexer } = await setupIndexer(
     [{ id: "c1", events: [assistantEvent(0, { reasoning: "内部思考内容", text: "对外回答" })] }],
     { include: { reasoning: true } },
   );
@@ -281,7 +321,7 @@ test("reconcile:include 打开 reasoning 后思考块进倒排", async () => {
 });
 
 test("reconcile:会话头的 cwd 写进索引,可按工作区查", async () => {
-  const { store, indexer } = await setupIndexer([
+  const { logReader, store, indexer } = await setupIndexer([
     { id: "w1", cwd: WORKSPACE_A, events: [userEvent(0, "工作区甲 的会话")] },
     { id: "w2", cwd: WORKSPACE_B, events: [userEvent(0, "工作区乙 的会话")] },
     { id: "w3", events: [userEvent(0, "没有 cwd 的会话")] },
@@ -300,16 +340,17 @@ test("reconcile:会话头的 cwd 写进索引,可按工作区查", async () => {
 });
 
 test("reconcile:被排除的工作区不进索引,已索引的残留会被清掉", async () => {
-  const { conversation, store, logs } = await setupIndexer([
+  const { conversation, logReader, store, logs } = await setupIndexer([
     { id: "keep", cwd: WORKSPACE_A, events: [userEvent(0, "保留的会话")] },
     { id: "drop", cwd: WORKSPACE_B, events: [userEvent(0, "要排除的会话")] },
   ]);
-  const all = createIndexer({ conversation, store, options: { recheckMs: 0 }, log: (message) => logs.push(message) });
+  const all = createIndexer({ conversation, logReader, store, options: { recheckMs: 0 }, log: (message) => logs.push(message) });
   await all.reconcile();
   assert.ok(store.getSession("drop") !== undefined, "没配排除规则时两个会话都索引");
 
   const filtered = createIndexer({
     conversation,
+    logReader,
     store,
     options: { recheckMs: 0, excludeWorkspaces: [WORKSPACE_B] },
     log: (message) => logs.push(message),
@@ -322,41 +363,28 @@ test("reconcile:被排除的工作区不进索引,已索引的残留会被清掉
   store.close();
 });
 
-test("便宜令牌:令牌没变就完全不读日志;变了才读;拿不到令牌退回指纹", async () => {
-  const entries = [{ id: "t1", events: [userEvent(0, "第一版正文")] }];
-  const conversation = createConversation(entries);
-  const store = await openStore({ path: ":memory:" });
-  // 可控令牌:模拟 sessionPersistence.stat 返回的文件物理身份。
-  let token = "size:100:mtime:1";
-  const tokens = { stat: async (id) => (id === "t1" ? { revision: token } : undefined) };
-  const indexer = createIndexer({ conversation, store, options: { recheckMs: 0 }, tokens, log: () => {} });
-
-  await indexer.reconcile();
-  assert.equal(store.getSession("t1").token, "size:100:mtime:1", "写完要把令牌记下来");
-  const afterFirst = conversation.calls.listEvents;
-
-  // 令牌没变:第二轮连 listEvents 都不该发生。
-  const second = await indexer.reconcile();
-  assert.equal(second.unchanged, 1);
-  assert.equal(conversation.calls.listEvents, afterFirst, "令牌命中时不许读日志");
-
-  // 令牌变了:必须回到指纹路径。
-  token = "size:200:mtime:2";
-  await indexer.reconcile();
-  assert.equal(conversation.calls.listEvents, afterFirst + 1, "令牌变了要重新比对");
-  assert.equal(store.getSession("t1").token, "size:200:mtime:2", "新令牌要落库");
-
-  // 拿不到令牌(服务缺席):每轮都退回指纹,但依旧能正确判定"未变"。
-  const noTokens = createIndexer({ conversation, store, options: { recheckMs: 0 }, log: () => {} });
-  const before = conversation.calls.listEvents;
-  const third = await noTokens.reconcile();
-  assert.equal(third.unchanged, 1);
-  assert.equal(conversation.calls.listEvents, before + 1, "没有令牌就退回指纹比对");
-  store.close();
-});
-
+test("第一相:日志长度没变就整轮跳过,变长了才续读", async () => {
+  const entries = [{ id: "t1", events: [userEvent(0, "第一版正文")] }];
+  const { conversation, logReader, store, indexer } = await setupIndexer(entries, { recheckMs: 0 });
+
+  await indexer.reconcile();
+  const afterFirst = logReader.calls.batch;
+  assert.equal(afterFirst, 1, "首次索引要读一次日志");
+
+  const second = await indexer.reconcile();
+  assert.equal(second.unchanged, 1, "日志长度没变 → unchanged");
+  assert.equal(logReader.calls.batch, afterFirst, "长度没变就不许再读事件");
+  assert.equal(logReader.calls.stat, 2, "但每轮都要看一次文件长度");
+
+  conversation.state.get("t1").events.push(userEvent(1, "第二版正文", T0 + 1000));
+  const third = await indexer.reconcile();
+  assert.equal(third.updated, 1, "日志变长了 → 续读");
+  assert.equal(logReader.calls.batch, afterFirst + 1, "只读新长出来的那一段");
+  assert.equal(store.search({ query: "第二版正文" }).items.length, 1);
+  store.close();
+});
 test("清单缓存:TTL 内复用,失效后重取,Ttl=0 时每轮都取", async () => {
-  const { conversation, store, indexer } = await setupIndexer([
+  const { conversation, logReader, store, indexer } = await setupIndexer([
     { id: "c1", events: [userEvent(0, "正文")] },
   ], { recheckMs: 0, listingTtlMs: 60000 });
   await indexer.reconcile();
@@ -384,9 +412,11 @@ test("归档会话:默认不索引(已索引的会清掉),includeArchived 打开
     { id: "arch", events: [userEvent(0, "归档会话")] },
   ]);
   const store = await openStore({ path: ":memory:" });
+  const logReader = createLogReader(conversation.state);
   let archived = ["arch"];
   const indexer = createIndexer({
     conversation,
+    logReader,
     store,
     options: { recheckMs: 0 },
     log: () => {},
@@ -398,7 +428,7 @@ test("归档会话:默认不索引(已索引的会清掉),includeArchived 打开
   assert.equal(first.updated, 1, "只索引没归档的那个");
   assert.ok(store.getSession("keep") !== undefined);
   assert.equal(store.getSession("arch"), undefined, "归档的压根不进索引");
-  assert.equal(conversation.calls.readSessionById.get("arch"), undefined, "归档的连日志都不读");
+  assert.equal(logReader.calls.batchById.get("arch"), undefined, "归档的连日志都不读");
 
   // 先索引、再归档:下一轮要把已经进索引的清掉(取消归档后自然再回来)。
   archived = [];
@@ -412,6 +442,7 @@ test("归档会话:默认不索引(已索引的会清掉),includeArchived 打开
 
   const all = createIndexer({
     conversation,
+    logReader,
     store,
     options: { recheckMs: 0, includeArchived: true },
     log: () => {},
@@ -438,7 +469,7 @@ test("计划:实时已索引会话再多,也得给从未索引的会话留名额
     live: true,
     events: [userEvent(0, `实时会话 ${i} 的内容`)],
   }));
-  const { conversation, store, indexer } = await setupIndexer(live, { maxSessionsPerReconcile: 4 });
+  const { conversation, logReader, store, indexer } = await setupIndexer(live, { maxSessionsPerReconcile: 4 });
   const first = await indexer.reconcile({ maxSessions: 10 });
   assert.equal(first.updated, 6, "先把六个实时会话都索引进去");
 
@@ -451,12 +482,12 @@ test("计划:实时已索引会话再多,也得给从未索引的会话留名额
   assert.equal(second.backlog, 2, "摘要要报出待补数量");
   assert.equal(second.updated, 2, "名额的一半必须留给从未索引的会话");
   assert.ok(store.getSession("cold-1") !== undefined && store.getSession("cold-2") !== undefined);
-  assert.ok(conversation.calls.readSessionById.get("cold-1") >= 1, "冷会话真的被读了");
+  assert.ok(logReader.calls.batchById.get("cold-1") >= 1, "冷会话真的被读了");
   store.close();
 });
 
 test("计划:backlog 清空后,名额全部回到实时与到期复查", async () => {
-  const { store, indexer } = await setupIndexer([
+  const { logReader, store, indexer } = await setupIndexer([
     { id: "live-a", live: true, events: [userEvent(0, "实时会话")] },
     { id: "cold-a", live: false, events: [userEvent(0, "冷会话")] },
   ], { maxSessionsPerReconcile: 4, recheckMs: 0 });
@@ -485,13 +516,13 @@ test("失败冷却:读不出来的会话不会每轮重试;冷却为 0 时恢复
   const second = await cooled.indexer.reconcile();
   assert.equal(second.planned, 0, "冷却期内不再进计划(ok 已索引且未到期、bad 在冷却)");
   assert.equal(second.errors, 0);
-  assert.equal(cooled.conversation.calls.readSessionById.get("bad"), 1, "坏会话只被读了一次");
+  assert.equal(cooled.logReader.calls.batchById.get("bad"), 1, "坏会话只被读了一次");
   cooled.store.close();
 
   const always = await setupIndexer(entries, { failureCooldownMs: 0, recheckMs: 600000 });
   await always.indexer.reconcile();
   const retried = await always.indexer.reconcile();
   assert.equal(retried.errors, 1, "冷却关掉后每轮都会重试");
-  assert.equal(always.conversation.calls.readSessionById.get("bad"), 2);
+  assert.equal(always.logReader.calls.batchById.get("bad"), 2);
   always.store.close();
 });

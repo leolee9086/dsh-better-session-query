@@ -19,6 +19,7 @@ import {
   toEpochMs,
 } from "../lib/index.js";
 import { DEFAULT_INCLUDE } from "../lib/blocks.js";
+import { logReaderFor } from "./log-reader-mock.mjs";
 
 // 假的工作区路径:只是测试数据,不指向本机任何真实目录。
 const WORKSPACE = "C:\\fake\\alpha";
@@ -111,7 +112,7 @@ async function setup(rawConfig = {}) {
   const ctx = fakeCtx(conversation);
   // 两个库都指到内存:单元测试不该在 DSH_HOME 下留真实文件——记忆库的默认路径是真实文件,
   // 会被临时目录的清理撞上(EBUSY)。
-  await apply(ctx, { path: ":memory:", memoryPath: ":memory:", ...rawConfig });
+  await apply(ctx, { path: ":memory:", memoryPath: ":memory:", logReader: logReaderFor(conversation), ...rawConfig });
   const tool = (toolName) => {
     const def = ctx._tools.get(toolName);
     assert.ok(def !== undefined, `没有注册工具 ${toolName}`);
@@ -258,6 +259,7 @@ test("apply:提供 sessionBlockQuery 服务且方法齐全", async () => {
     "queryMessages",
     "querySessions",
     "queryWorkspaces",
+    "readRawBlocks",
     "reconcile",
     "removeAttribute",
     "searchBlocks",
@@ -285,7 +287,7 @@ test("端到端:status(reindex) 报告规模与上次更新", async () => {
   assert.doesNotMatch(output, /会话 s-1: 修订 /, "没给 sessionId 就不报告单个会话");
 
   const perSession = await app.run("session_blocks_status", { sessionId: SESSION_ID });
-  assert.match(perSession, /会话 s-1(「苹果会话」)?: 修订 \d+:-?\d+:\w+/);
+  assert.match(perSession, /会话 s-1(「苹果会话」)?: 修订 \d+/);
   assert.match(perSession, /5 块\(4 可检索\)/);
   const absent = await app.run("session_blocks_status", { sessionId: "没这个会话" });
   assert.match(absent, /会话 没这个会话: 尚未索引/);

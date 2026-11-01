@@ -5,6 +5,7 @@ import { readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { logReaderFor } from "./log-reader-mock.mjs";
 import { createFileLog } from "../lib/logfile.js";
 import { resolveLogFile } from "../lib/index.js";
 import { apply } from "../lib/index.js";
@@ -65,6 +66,8 @@ test("接线:对账失败的原因落盘,状态工具能报出来", async () => 
       return [{ seq: 0, type: "user/message", time: 1, surface: "current" }];
     },
     async readSession(id) {
+      // 索引器现在从日志源取事件,失败必须发生在这条路径上才有意义。
+      if (id === failingId) throw new Error("日志回放校验失败(造的)");
       return {
         session: { id, cwd: "D:\\dev" },
         inheritedEventCount: 0,
@@ -84,7 +87,7 @@ test("接线:对账失败的原因落盘,状态工具能报出来", async () => 
   };
   // 记忆库也要显式指到内存:它的默认路径落在 DSH_HOME 下,否则会在这个临时目录里
   // 留下一个被锁住的 session-memory.db,让下面的 cleanup() 删不掉目录。
-  await apply(ctx, { path: ":memory:", memoryPath: ":memory:", logFile: logPath });
+  await apply(ctx, { path: ":memory:", memoryPath: ":memory:", logFile: logPath, logReader: logReaderFor(conversation) });
   const status = await tools.get("session_blocks_status").execute({ reindex: true }, {});
   assert.match(status, /失败样例/);
   assert.match(status, new RegExp(failingId));

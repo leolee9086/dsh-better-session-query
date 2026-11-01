@@ -250,17 +250,10 @@ test("对账两轮:第二轮没有变更时不重写正文,块与倒排都原样
     { seq: 0, type: "user/message", time: 1000, surface: "current", data: { content: [{ type: "text", text: "提问甲" }] } },
     { seq: 1, type: "assistant/message", time: 2000, surface: "current", data: { message: { content: [{ type: "text", text: "答复甲" }] } } },
   ];
-  let readSessionCalls = 0;
+  let batchCalls = 0;
   const conversation = {
     async listSessions() {
       return [{ header: { id: sessionId, cwd: "D:\\dev" }, live: false, persisted: true }];
-    },
-    async listEvents() {
-      return events.map((event) => ({ seq: event.seq, type: event.type, time: event.time, surface: event.surface }));
-    },
-    async readSession() {
-      readSessionCalls += 1;
-      return { session: { id: sessionId, cwd: "D:\\dev" }, inheritedEventCount: 0, events };
     },
     async readTitleSnapshots(ids) {
       return ids.map(() => ({ status: "fulfilled", value: {} }));
@@ -268,13 +261,22 @@ test("对账两轮:第二轮没有变更时不重写正文,块与倒排都原样
   };
   const store = await openStore({ path: ":memory:" });
   try {
-    const indexer = createIndexer({ conversation, store, options: { recheckMs: 0 }, log: () => {} });
+        const logReader = {
+      locateSessionLog: () => "fake://" + sessionId,
+      statSessionLog: () => ({ size: events.length }),
+      readSessionBatch: (path, offset, limit) => {
+        batchCalls += 1;
+        const slice = events.slice(offset, offset + limit);
+        return { events: slice, nextOffset: offset + slice.length, done: offset + slice.length >= events.length, torn: false };
+      },
+    };
+    const indexer = createIndexer({ conversation, logReader, store, options: { recheckMs: 0 }, log: () => {} });
     await indexer.reconcile({});
     const rowidBefore = ftsRowid(store, `${sessionId}#0#0`);
     const second = await indexer.reconcile({});
     assert.equal(second.unchanged, 1);
     assert.equal(second.updated, 0);
-    assert.equal(readSessionCalls, 1, "第二轮连正文都没读");
+    assert.equal(batchCalls, 1, "第二轮连日志都没读");
     assert.equal(ftsRowid(store, `${sessionId}#0#0`), rowidBefore);
   } finally {
     store.close();

@@ -6,6 +6,7 @@ import { apply } from "../lib/index.js";
 // 测试不碰真实用户目录:DSH_HOME 指到临时目录,库与诊断日志路径随之隔离。
 process.env.DSH_HOME = `${(process.env.TEMP ?? process.env.TMP ?? ".").replace(/[\\/]+$/, "")}/bsq-test-home-${process.pid}`;
 import { openStore } from "../lib/store.js";
+import { logReaderFor } from "./log-reader-mock.mjs";
 import { createIndexer, workspaceAllowed } from "../lib/indexer.js";
 
 /** 两个工作区、各一个会话的假 conversation 服务(DSH ctx.sessionQuery 的最小契约)。 */
@@ -75,7 +76,7 @@ test("对账把会话头的 cwd 写进索引,并按工作区聚合", async () =>
   const conversation = fakeConversation();
   const store = await openStore({ path: ":memory:" });
   try {
-    const indexer = createIndexer({ conversation, store, options: {}, log: () => {} });
+    const indexer = createIndexer({ conversation, logReader: logReaderFor(conversation), store, options: {}, log: () => {} });
     const summary = await indexer.reconcile({ force: true });
     assert.equal(summary.updated, 3);
     const workspaces = store.queryWorkspaces();
@@ -93,8 +94,9 @@ test("对账把会话头的 cwd 写进索引,并按工作区聚合", async () =>
 });
 
 test("服务层:工作区清单与会话清单", async () => {
-  const ctx = fakeCtx(fakeConversation());
-  await apply(ctx, { path: ":memory:" });
+  const conversation = fakeConversation();
+  const ctx = fakeCtx(conversation);
+  await apply(ctx, { path: ":memory:", logReader: logReaderFor(conversation) });
   const service = ctx._provided.get("sessionBlockQuery");
   await service.reconcile({ force: true });
 
@@ -107,8 +109,9 @@ test("服务层:工作区清单与会话清单", async () => {
 });
 
 test("工具层:按工作区查块、按工作区检索、列工作区/会话", async () => {
-  const ctx = fakeCtx(fakeConversation());
-  await apply(ctx, { path: ":memory:" });
+  const conversation = fakeConversation();
+  const ctx = fakeCtx(conversation);
+  await apply(ctx, { path: ":memory:", logReader: logReaderFor(conversation) });
   await ctx._tools.get("session_blocks_status").execute({ reindex: true }, {});
 
   const workspaceList = await ctx._tools.get("session_blocks_workspaces").execute({}, {});
@@ -141,12 +144,13 @@ test("索引层:排除工作区后不收,已索引的会被清掉", async () => 
   const conversation = fakeConversation();
   const store = await openStore({ path: ":memory:" });
   try {
-    const all = createIndexer({ conversation, store, options: {}, log: () => {} });
+    const all = createIndexer({ conversation, logReader: logReaderFor(conversation), store, options: {}, log: () => {} });
     await all.reconcile({ force: true });
     assert.equal(store.querySessions().items.length, 3);
 
     const filtered = createIndexer({
       conversation,
+      logReader: logReaderFor(conversation),
       store,
       options: { excludeWorkspaces: ["d:\\WORK\\"] },
       log: () => {},
@@ -165,6 +169,7 @@ test("索引层:白名单只收列出的工作区,无 cwd 的会话可关掉", a
   try {
     const only = createIndexer({
       conversation,
+      logReader: logReaderFor(conversation),
       store,
       options: { includeWorkspaces: ["D:\\work"] },
       log: () => {},
@@ -174,6 +179,7 @@ test("索引层:白名单只收列出的工作区,无 cwd 的会话可关掉", a
 
     const noOrphan = createIndexer({
       conversation,
+      logReader: logReaderFor(conversation),
       store,
       options: { includeWithoutWorkspace: false },
       log: () => {},
@@ -186,8 +192,9 @@ test("索引层:白名单只收列出的工作区,无 cwd 的会话可关掉", a
 });
 
 test("查询层:排除工作区,且不误伤没有 cwd 的会话", async () => {
-  const ctx = fakeCtx(fakeConversation());
-  await apply(ctx, { path: ":memory:" });
+  const conversation = fakeConversation();
+  const ctx = fakeCtx(conversation);
+  await apply(ctx, { path: ":memory:", logReader: logReaderFor(conversation) });
   await ctx._tools.get("session_blocks_status").execute({ reindex: true }, {});
 
   const blocks = await ctx._tools.get("session_blocks_query").execute({ excludeWorkspaces: ["D:\\work"] }, {});
