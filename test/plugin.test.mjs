@@ -531,6 +531,38 @@ test("normalizeOptions:include 与 DEFAULT_INCLUDE 合并,工作区开关有默�
   assert.equal(normalizeOptions({ includeWithoutWorkspace: false }).includeWithoutWorkspace, false);
 });
 
+test("normalizeOptions:没有数据支撑的向量参数都是配置项", () => {
+  const defaults = normalizeOptions({});
+  assert.equal(defaults.memoryVectors.rrfConstant, 60);
+  assert.equal(defaults.memoryVectors.candidateFactor, 4);
+  assert.equal(defaults.memoryVectors.candidateFloor, 40);
+  assert.equal(defaults.memoryVectors.relevanceMode, "lane-normalized");
+  assert.equal(defaults.memoryVectors.chunkChars, 12000);
+  assert.equal(defaults.memoryVectors.chunkOverlap, 200);
+  assert.equal(defaults.memoryVectors.imageMaxBytes, 16 * 1024 * 1024);
+  assert.equal(defaults.memoryRecall.order, "relevance-first");
+  assert.deepEqual(defaults.passiveRecall.minSimilarityBySource, { "local-multimodal": 0.3 },
+    "来源阈值只是默认表,不是写死的常量");
+
+  const custom = normalizeOptions({
+    memoryVectors: { rrfConstant: 30, candidateFactor: 2, candidateFloor: 10, relevanceMode: "fusion",
+      chunkChars: 2000, chunkOverlap: 5000, imageMaxBytes: 4096 },
+    memoryRecall: { order: "fresh-first" },
+    passiveRecall: { minSimilarity: 0.2, minSimilarityBySource: { "remote-embed": 0.6 } },
+  });
+  assert.equal(custom.memoryVectors.rrfConstant, 30);
+  assert.equal(custom.memoryVectors.candidateFactor, 2);
+  assert.equal(custom.memoryVectors.relevanceMode, "fusion");
+  assert.equal(custom.memoryVectors.chunkChars, 2000);
+  assert.equal(custom.memoryVectors.chunkOverlap, 1999, "重叠必须小于分片");
+  assert.equal(custom.memoryVectors.imageMaxBytes, 4096);
+  assert.equal(custom.memoryRecall.order, "fresh-first");
+  assert.equal(custom.passiveRecall.minSimilarity, 0.2);
+  assert.deepEqual(custom.passiveRecall.minSimilarityBySource,
+    { "local-multimodal": 0.3, "remote-embed": 0.6 }, "按来源的阈值是合并,不是整表替换");
+  assert.equal(normalizeOptions({ memoryVectors: { relevanceMode: "别的东西" } }).memoryVectors.relevanceMode, "lane-normalized");
+});
+
 test("toEpochMs:毫秒数与 ISO 串都认,认不出来返回 undefined", () => {
   assert.equal(toEpochMs(1700000000000), 1700000000000);
   assert.equal(toEpochMs(1700000000000.7), 1700000000000, "小数毫秒取整");

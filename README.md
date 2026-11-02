@@ -322,8 +322,44 @@ POST /session-blocks/compact        回收空间，body 可给 {"vacuum":false} 
 | `snippetTokens` | `24` | FTS5 snippet 的 token 预算 |
 | `logFile` / `logMaxBytes` | `<DSH_HOME>/logs/session-blocks.log` / `2MB` | 诊断日志（stdout 不落地，诊断必须落盘）；`"off"` 关闭 |
 | `monitor` | `{ enabled: true, path: "/session-blocks" }` | 界面监控数据面：关掉就不挂路由（宿主工具与服务不受影响） |
+| `memoryPath` | `<DSH_HOME>/session-memory.db` | 记忆库路径（`:memory:` 不落盘） |
+| `memoryTtlMs` | `7200000` | "新鲜"的时间窗；只影响排序与展示，不决定能不能召回 |
+| `memoryRecall.order` | `"relevance-first"` | 召回输出顺序：`relevance-first`（相关优先，新鲜只作并列偏好）/ `fresh-first`（旧行为，用于对照） |
+| `memoryVectors` / `passiveRecall` | 见下 | 向量同步与被动召回的子配置 |
 
 **没有 `openAt`。** 那是官方 `session-query-sqlite` 的配置词汇（shipped profile 用它关掉官方那套索引），本插件不抄它：启用后台索引更新就在加载时开库并把定时器接上——索引是后台渐进的过程，不能等"有人碰一下"才开始，否则每次重启都停在原地。不想要后台工作设 `backgroundReconcileMs: 0`；整个插件不要就在 profile 里禁用那一行。开库失败只记日志、不拒绝加载（一个后台索引不该把 profile 拖下水）。
+
+### 向量与召回（子配置）
+
+`memoryVectors`：
+
+| 键 | 默认 | 说明 |
+|---|---|---|
+| `enabled` | `true` | 关掉就只做关键词召回；没有 `embeddingService`/`vectorStore` 时本来就会自动降级 |
+| `path` | `<memoryPath>.vectors.sqlite` | 向量同步状态库（游标、任务、向量缓存） |
+| `intervalMs` | `1000` | 同步轮询间隔 |
+| `jobBatch` / `changeBatch` | `16` / `200` | 每轮处理的任务数 / 变更数 |
+| `queryTimeoutMs` | `8000` | 查询嵌入的超时 |
+| `maxCandidates` | `2000` | 候选上限（达到就诚实报告 `truncated`） |
+| `rrfConstant` | `60` | 排名融合常数——没有基线支撑，属于占位值 |
+| `candidateFactor` / `candidateFloor` | `4` / `40` | 首轮取 `max(limit×factor, floor)` 个候选，不够就翻倍 |
+| `relevanceMode` | `"lane-normalized"` | 排序策略：`lane-normalized`（每路内部归一化后排序）/ `fusion`（纯融合排名）。两种都没有基线支撑 |
+| `chunkChars` / `chunkOverlap` | `12000` / `200` | 长记忆分片大小与重叠（UTF-16 单元） |
+| `imageMaxBytes` | `16777216` | 单张图片上限 |
+
+`passiveRecall`：
+
+| 键 | 默认 | 说明 |
+|---|---|---|
+| `enabled` | `true` | |
+| `minChars` | `8` | 太短的用户输入不查 |
+| `minScore` | `1` | 关键词门槛（bm25 取负之后比较） |
+| `minSimilarity` | `0.45` | 向量余弦门槛 |
+| `minSimilarityBySource` | `{ "local-multimodal": 0.3 }` | 按来源覆盖余弦门槛（**合并**，不是整表替换） |
+| `limit` / `cooldownMinutes` | `3` / `10` | 一次推几条 / 同一批多久不重复推 |
+
+**这些门槛与策略都没有独立标注的数据支撑**（0.3/0.45 来自 2026-09-28 的三条自造记忆），
+所以一律可配：默认值只是占位，拿到真实数据之后应当按实测改，而不是把某个"看起来对"的数写死。
 
 ## 安装
 

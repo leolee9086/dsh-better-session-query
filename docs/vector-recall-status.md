@@ -23,6 +23,17 @@
 - 三包冒烟 `scripts/acceptance-vector-memory.mjs` **11 项全过**（真侧车 + 真本地模型 + 真 SQLite，
   含新增的图文混合查询一项）
 
+### 没有数据支撑的值，全部暴露成配置
+
+阈值与策略没有一个有独立标注的数据支撑，所以都不写死在代码里：
+
+- `memoryVectors`：`rrfConstant`、`candidateFactor`、`candidateFloor`、`relevanceMode`
+  （`lane-normalized` / `fusion`）、`chunkChars`、`chunkOverlap`、`imageMaxBytes`
+- `memoryRecall.order`：`relevance-first` / `fresh-first`
+- `passiveRecall.minSimilarity` 与 `minSimilarityBySource`（后者是合并，不是整表替换）
+
+共享召回库不再内置任何来源 id 的特例：门槛只从调用方传入的值里取，默认 0.45 是明写的占位值。
+
 阶段 A 之后仍未完成：
 
 - **没有基线评测**：被动阈值（0.3/0.45）、归一化相关度的实际意义，都还是保守默认值，

@@ -14,6 +14,15 @@ test("相关优先：更相关的旧记忆不会被刚记下的弱候选压过",
   assert.deepEqual(orderRecalled(items, 2).map((item) => item.blockId), ["relevant-old", "fresh-weak"]);
 });
 
+test("fresh-first 模式：回到新鲜优先，用于对照", () => {
+  const items = [
+    { blockId: "fresh-weak", fresh: true, time: 9, recallScore: 1 / 62 },
+    { blockId: "relevant-old", fresh: false, time: 1, recallScore: 1 / 61 },
+  ];
+  assert.deepEqual(orderRecalled(items, 2, "fresh-first").map((item) => item.blockId), ["fresh-weak", "relevant-old"]);
+  assert.deepEqual(orderRecalled(items, 2).map((item) => item.blockId), ["relevant-old", "fresh-weak"]);
+});
+
 test("并列时新鲜优先，再按时间", () => {
   const items = [
     { blockId: "stale-newer", fresh: false, time: 8, recallScore: 0.5 },
