@@ -18,9 +18,9 @@ DSH 插件：给会话历史再挂一套**块级并行索引**。
 
 主动 `session_blocks_recall` 已接受 `query`、`keywords` 或 `image`，并与被动入口共用独立的 `@leolee9086/dsh-hybrid-recall` 实现。工具适配和公共库使用 TypeScript，构建后的 JS/声明文件随仓库提交。
 
-公共库尚未发布，当前开发依赖是 `file:../dsh-hybrid-recall`，需要相邻的公共库工作树。先在公共库运行 `pnpm install`、`pnpm build`，再在本仓运行 `pnpm install`、`pnpm build`。正式分发前需换成公共库发布版本。
+公共库依赖锁定 `@leolee9086/dsh-hybrid-recall@0.1.0` 的 GitHub Release HTTPS 安装包（npm registry 发布尚待二次认证）；本仓直接运行 `pnpm install`、`pnpm build` 即可。向量行为测试使用正式 `@leolee9086/vectordb` 开发依赖，不读取相邻插件或 s-forge 源码。
 
-本次仅补齐入口与抽离公共实现；图片 `path/image` 映射、图文组合和排序缺口仍见 [开发状态](docs/vector-recall-status.md)，不能据此宣称图片召回已可用。
+图片 `path/image` 契约、图文混合查询与排序已在 2026-11-02 补齐（见 [开发状态](docs/vector-recall-status.md)）；召回质量仍以基线评测为准，暂不宣称达到质量目标。
 
 ## v0.1.1：原始块读取接口
 
@@ -377,6 +377,8 @@ pnpm run check   # node --check lib/*.js
 ```
 
 14 个测试文件共 136 条：`blocks` 10 / `workspace` 7 / `title` 5 / `store` 25 / `indexer` 20 / `plugin` 19 / `async` 5 / `incremental` 8 / `cjk-recall` 8 / `monitor` 9 / `compact` 7 / `logfile` 5 / `sql` 6 / `client` 2。测试全部用假 ctx 与假 conversation 服务，不打网络、不读真实会话：块抽取、存储与过滤、差量写入、中文召回、后台更新（选批/令牌/清单缓存/失败冷却/归档排除/修订/节流/强制/错误隔离/工作区排除）、插件入口与工具的端到端文本输出、监控快照与路由守卫（含 loopback 403 与暂停路由）、库收缩与老版本库重建、只读 SQL 通道与循环判定语句、**界面半边的字典键一致性**（真加载 `lib/client.js`、抓出注册的 zh/en 字典比对，防"只改一份语言"这类漂移）。**不要在这个沙箱里用 `node --test`**（会 spawn 子进程被拦成 EPERM），逐个跑 `node test/xxx.test.mjs` 即可。
+
+（2026-11-02 更新：现在是 26 个测试文件、195 条。有完整文件权限时 `node --experimental-transform-types --test test/*.test.mjs test/*.test.ts` 可以直接跑，`DSH_REBEC_PATH` 指向 rebec 的 `rebec.node` 即可；上面的 EPERM 只在受限沙箱里出现。）
 
 ## 许可证
 

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { openMemoryStore, MEMORY_TOOL } from "../lib/memory.js";
 import { openMemoryVectors } from "../lib/memory-vectors.js";
-import { createVectorStore } from "../../dsh-vectordb/src/host.js";
+import { openTestVectorStore } from "./helpers/vector-store.ts";
 
 function source(id = "local-text", revision = "one", dimension = 2) {
   return { id, spaceId: id + "-" + revision, field: "v_" + id.replaceAll("-", "_") + "_" + revision,
@@ -36,12 +36,12 @@ function block(id, q, a, time = Date.now()) {
 async function setup(t, embeddings = provider()) {
   const dir = await mkdtemp(join(tmpdir(), "dsh-memory-vector-"));
   const memory = await openMemoryStore({ path: join(dir, "memory.sqlite") });
-  let vectors = createVectorStore({}, { path: join(dir, "vectors") });
+  let vectors = await openTestVectorStore(join(dir, "vectors"));
   let sync;
   t.after(async () => { await sync?.close(); await vectors.close(); memory.close(); await rm(dir, { recursive: true, force: true }); });
   const reopen = async (next = embeddings, restartVectorStore = false) => {
     await sync?.close();
-    if (restartVectorStore) { await vectors.close(); vectors = createVectorStore({}, { path: join(dir, "vectors") }); }
+    if (restartVectorStore) { await vectors.close(); vectors = await openTestVectorStore(join(dir, "vectors")); }
     sync = await openMemoryVectors({ memory, embeddings: next, vectorStore: vectors, path: join(dir, "sync.sqlite"), options: { retryBaseMs: 100000 } });
     return sync;
   };

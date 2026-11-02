@@ -25,6 +25,7 @@ import { createVectorStore } from "../../dsh-vectordb/src/host.js";
 const photoURL = new URL("../../dsh-embeddings/test/fixtures/cats.png", import.meta.url);
 const photoBytes = await readFile(photoURL);
 const photoSha = createHash("sha256").update(photoBytes).digest("hex");
+const photoPath = photoURL.pathname.slice(1).replaceAll("/", "\\");
 
 const evidence = [];
 const record = (name, detail) => {
@@ -102,10 +103,18 @@ try {
   assert.ok(crossModal.items.some((i) => i.blockId === "photo"), "文字必须能冲图片分片找回那张照片");
 
   // ── 6. 以图搜记忆 ─────────────────────────────────────────────────
-  const byImage = await sync.search({ image: { path: photoURL.pathname.slice(1).replaceAll("/", "\\"), sha256: photoSha }, limit: 3 });
+  const byImage = await sync.search({ image: { path: photoPath, sha256: photoSha }, limit: 3 });
   record("以图搜记忆", { items: byImage.items.map((i) => ({ blockId: i.blockId, modality: i.matchedModality, similarity: Number(i.similarity?.toFixed?.(4) ?? 0) })),
     failures: byImage.failures, truncated: byImage.truncated });
   assert.ok(byImage.items.some((i) => i.blockId === "photo"), "用同一张图应当能找回带它的记忆");
+
+  // ── 6b. 图文混合查询：文字与图片两条线索都要参与 ─────────────────
+  // 以前有图就只算图片向量，文字线索被直接丢掉；这里要两条都带回结果。
+  const mixed = await sync.search({ query: "数据库被别的进程占用", image: { path: photoPath, sha256: photoSha }, limit: 3 });
+  record("图文混合查询", mixed.items.map((i) => ({ blockId: i.blockId,
+    evidence: i.vectorSources.map((s) => s.queryModality + "/" + s.modality) })));
+  assert.ok(mixed.items.some((i) => i.blockId === "lock"), "文字线索要带回文字那条");
+  assert.ok(mixed.items.some((i) => i.blockId === "photo"), "图片线索要带回带图那条");
 
   // ── 7. 混合召回：关键词 + 向量融合，且看得到各自依据 ──
   const hybrid = await hybridRecall({ memory, vectors: sync }, { query: "生日", limit: 3 });
