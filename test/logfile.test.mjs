@@ -5,10 +5,10 @@ import { readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { logReaderFor } from "./log-reader-mock.mjs";
 import { createFileLog } from "../lib/logfile.js";
 import { resolveLogFile } from "../lib/index.js";
 import { apply } from "../lib/index.js";
+import { LogFixture, loadRebec } from "./real-log.mjs";
 
 const DIR = join(tmpdir(), `bsq-logfile-test-${process.pid}`);
 const cleanup = () => rmSync(DIR, { recursive: true, force: true });
@@ -50,49 +50,43 @@ test("resolveLogFile:默认 <DSH_HOME>/logs,off 关闭,显式路径透传", () =
   delete process.env.DSH_HOME;
 });
 
-test("接线:对账失败的原因落盘,状态工具能报出来", async () => {
-  process.env.DSH_HOME = join(DIR, "home2");
-  const logPath = join(DIR, "home2", "logs", "session-blocks.log");
-  const failingId = "session-broken";
-  const conversation = {
-    async listSessions() {
-      return [
-        { header: { id: "session-ok", cwd: "D:\\dev" }, live: false, persisted: true },
-        { header: { id: failingId, cwd: "D:\\dev" }, live: false, persisted: true },
-      ];
-    },
-    async listEvents(id) {
-      if (id === failingId) throw new Error("日志回放校验失败(造的)");
-      return [{ seq: 0, type: "user/message", time: 1, surface: "current" }];
-    },
-    async readSession(id) {
-      // 索引器现在从日志源取事件,失败必须发生在这条路径上才有意义。
-      if (id === failingId) throw new Error("日志回放校验失败(造的)");
-      return {
-        session: { id, cwd: "D:\\dev" },
-        inheritedEventCount: 0,
-        events: [{ seq: 0, type: "user/message", time: 1, surface: "current", data: { content: [{ type: "text", text: "正文" }] } }],
-      };
-    },
-    async readTitleSnapshots(ids) { return ids.map(() => ({ status: "fulfilled", value: {} })); },
-  };
-  const tools = new Map();
-  const ctx = {
-    get: (name) => (name === "sessionQuery" ? conversation : undefined),
-    tools: { register: (def) => { tools.set(def.name, def); } },
-    provide: () => {},
-    effect: (callback) => { callback(); },
-    inject: () => ({ dispose() {} }),
-    logger: { info() {} },
-  };
-  // 记忆库也要显式指到内存:它的默认路径落在 DSH_HOME 下,否则会在这个临时目录里
-  // 留下一个被锁住的 session-memory.db,让下面的 cleanup() 删不掉目录。
-  await apply(ctx, { path: ":memory:", memoryPath: ":memory:", logFile: logPath, logReader: logReaderFor(conversation) });
-  const status = await tools.get("session_blocks_status").execute({ reindex: true }, {});
-  assert.match(status, /失败样例/);
-  assert.match(status, new RegExp(failingId));
-  assert.match(status, /日志回放校验失败/);
-  const onDisk = readFileSync(logPath, "utf8");
-  assert.match(onDisk, /比对会话 session-broken 失败:日志回放校验失败/, "失败原因必须落盘,stdout 不算数");
-  cleanup();
+// 这一例走真实日志:两个会话都真的落在临时 DSH_HOME 里,其中一个的日志被写成坏魔数。
+// 失败因此发生在 rebec 分帧解压那条生产路径上,原因要落进诊断日志、由状态工具报出来。
+const rebec = loadRebec();
+const skipNoRebec = rebec === undefined ? "需要可用的 rebec(设置 DSH_REBEC_PATH 或安装 @leolee9086/rebec)" : false;
+
+test("接线:对账失败的原因落盘,状态工具能报出来", { skip: skipNoRebec }, async () => {
+  // fixture 自己接管 DSH_HOME(指向它的临时目录),会话目录与诊断日志都落在它下面。
+  const fixture = new LogFixture("bsq-logfile-");
+  try {
+    fixture.write("session-ok", {
+      cwd: "D:\\dev",
+      events: [{ seq: 0, type: "user/message", time: 1, surfaceOp: "append", data: { content: [{ type: "text", text: "正文" }] } }],
+    });
+    // 坏魔数:定位和 stat 都成功,失败只会发生在 rebec 解帧时——也就是索引的第二相。
+    fixture.corrupt("session-broken");
+    const logPath = join(fixture.home, "logs", "session-blocks.log");
+    const conversation = fixture.conversation();
+    const tools = new Map();
+    const ctx = {
+      get: (name) => (name === "sessionQuery" ? conversation : undefined),
+      tools: { register: (def) => { tools.set(def.name, def); } },
+      provide: () => {},
+      effect: (callback) => { callback(); },
+      inject: () => ({ dispose() {} }),
+      logger: { info() {} },
+    };
+    // 记忆库也要显式指到内存:它的默认路径落在 DSH_HOME 下,否则会在临时目录里
+    // 留下一个被锁住的 session-memory.db,让 fixture.done() 删不掉目录。
+    await apply(ctx, { path: ":memory:", memoryPath: ":memory:", logFile: logPath, logReader: fixture.logReader() });
+    const status = await tools.get("session_blocks_status").execute({ reindex: true }, {});
+    assert.match(status, /已索引 1 个会话/, "正常会话照常进索引");
+    assert.match(status, /失败样例/);
+    assert.match(status, /\[write\] session-broken/, "失败发生在读日志那一相,不是清单");
+    assert.match(status, /不是 zstd 帧头/);
+    const onDisk = readFileSync(logPath, "utf8");
+    assert.match(onDisk, /索引会话 session-broken 失败:字节 0 处不是 zstd 帧头/, "失败原因必须落盘,stdout 不算数");
+  } finally {
+    fixture.done();
+  }
 });

@@ -1,7 +1,7 @@
 // test/plugin.test.mjs — 插件入口测试:假 ctx + 假 conversation 服务 + :memory: 库,端到端跑工具。
 //
 // 不 import 任何 DSH 包:ctx 只用 apply 真正会碰到的那几个面(get/provide/tools.register/effect/logger)。
-import test from "node:test";
+import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
@@ -19,7 +19,13 @@ import {
   toEpochMs,
 } from "../lib/index.js";
 import { DEFAULT_INCLUDE } from "../lib/blocks.js";
-import { logReaderFor } from "./log-reader-mock.mjs";
+import { LogFixture } from "./real-log.mjs";
+
+// 每个用例都会开一个临时 DSH_HOME,跑完统一删。
+const fixtures = [];
+after(() => {
+  for (const item of fixtures) item.done();
+});
 
 // 假的工作区路径:只是测试数据,不指向本机任何真实目录。
 const WORKSPACE = "C:\\fake\\alpha";
@@ -59,15 +65,16 @@ function fakeCtx(conversation, options = {}) {
 /** 会话事件:seq0 用户、seq1 agent(思考 + 正文)、seq2 用户、seq3 agent。 */
 function sessionEvents() {
   return [
-    { seq: 0, type: "user/message", time: T.ask, data: { content: [{ type: "text", text: "苹果 帮我看看" }] } },
+    { seq: 0, type: "user/message", time: T.ask, surfaceOp: "append", data: { content: [{ type: "text", text: "苹果 帮我看看" }] } },
     {
       seq: 1,
       type: "assistant/message",
       time: T.answer,
+      surfaceOp: "append",
       data: { message: { content: [{ type: "reasoning", text: "先想一下关键词" }, { type: "text", text: "苹果 在这里" }] } },
     },
-    { seq: 2, type: "user/message", time: T.follow, data: { content: [{ type: "text", text: "还有别的吗" }] } },
-    { seq: 3, type: "assistant/message", time: T.final, data: { message: { content: [{ type: "text", text: "橘子 不在这里" }] } } },
+    { seq: 2, type: "user/message", time: T.follow, surfaceOp: "append", data: { content: [{ type: "text", text: "还有别的吗" }] } },
+    { seq: 3, type: "assistant/message", time: T.final, surfaceOp: "append", data: { message: { content: [{ type: "text", text: "橘子 不在这里" }] } } },
   ];
 }
 
@@ -75,12 +82,20 @@ function sessionEvents() {
 function fakeConversation() {
   const events = sessionEvents();
   const calls = { listSessions: 0, listEvents: 0, readSession: 0, readEvent: 0, readTitleSnapshots: 0 };
+  // 事件真的写进临时 DSH_HOME:索引读的是文件,不是这份数组。
+  const fixture = new LogFixture("bsq-plugin-");
+  fixture.write(SESSION_ID, { cwd: WORKSPACE, events });
+  fixtures.push(fixture);
+  const listing = fixture.conversation();
+  const reader = fixture.logReader();
   return {
     events,
+    logReader: reader,
     calls,
+    fixture,
     async listSessions() {
       calls.listSessions += 1;
-      return [{ header: { id: SESSION_ID, cwd: WORKSPACE }, live: false, persisted: true }];
+      return listing.listSessions();
     },
     async listEvents(id) {
       calls.listEvents += 1;
@@ -112,7 +127,7 @@ async function setup(rawConfig = {}) {
   const ctx = fakeCtx(conversation);
   // 两个库都指到内存:单元测试不该在 DSH_HOME 下留真实文件——记忆库的默认路径是真实文件,
   // 会被临时目录的清理撞上(EBUSY)。
-  await apply(ctx, { path: ":memory:", memoryPath: ":memory:", logReader: logReaderFor(conversation), ...rawConfig });
+  await apply(ctx, { path: ":memory:", memoryPath: ":memory:", logReader: conversation.logReader, ...rawConfig });
   const tool = (toolName) => {
     const def = ctx._tools.get(toolName);
     assert.ok(def !== undefined, `没有注册工具 ${toolName}`);
@@ -120,6 +135,7 @@ async function setup(rawConfig = {}) {
   };
   return {
     conversation,
+    logReader: conversation.logReader,
     ctx,
     tool,
     run: (toolName, args = {}, exec = {}) => tool(toolName).execute(args, exec),
@@ -344,12 +360,13 @@ test("端到端:query 的时间参数也接受 ISO 串", async () => {
 
 test("端到端:query blocks 命中思考块(不走倒排的元数据查询)", async () => {
   const app = await setupIndexed();
+  const batchBefore = app.logReader.calls.batch;
   const output = await app.run("session_blocks_query", { blockTypes: ["reasoning"], lengthMin: 1, lengthMax: 20 });
   assert.match(output, /命中 1 个块/);
   assert.match(output, /reasoning/);
   assert.match(output, /未进倒排/);
   assert.match(output, new RegExp(`${SESSION_ID}#1#0`), "带上块 id,供下一步按块读正文");
-  assert.equal(app.conversation.calls.readSession, 1, "二次查询不该再读正文:修订指纹没变");
+  assert.equal(app.logReader.calls.batch, batchBefore, "二次查询不该再读日志:物理身份没变");
 
   const outOfRange = await app.run("session_blocks_query", { blockTypes: ["reasoning"], lengthMin: 100 });
   assert.match(outOfRange, /没有符合条件的块/);
